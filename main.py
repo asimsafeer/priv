@@ -186,18 +186,30 @@ def generate_commits_fast(
     return True
 
 
+def get_daily_target(date_str, min_target, max_target):
+    """
+    Returns a deterministic, natural-looking varied target for a given date
+    within [min_target, max_target] so adjacent days don't look identical
+    while staying safely above GitHub's Level 4 ('More') threshold.
+    """
+    if max_target <= min_target:
+        return min_target
+    rng = random.Random(f"priv-vary-v1:{date_str}")
+    return rng.randint(min_target, max_target)
+
+
 def fill_graph_more(
     repo_path=".",
     target_per_day=DEFAULT_TARGET,
+    max_target_per_day=None,
     days_back=None,
     push=True,
     filename="data.txt",
     local_only=False,
 ):
     """
-    Fills the GitHub contribution graph completely green in the 'More' category.
-    Accounts for both local commits and total GitHub profile contributions so every
-    day comfortably exceeds the Level 4 (75% of max) threshold.
+    Fills the GitHub contribution graph completely green in the 'More' category
+    with natural day-to-day variation between target_per_day and max_target_per_day.
     """
     print("=" * 65)
     print("🌿 graph-greener: Max Intensity ('More' Category) Mode")
@@ -208,6 +220,13 @@ def fill_graph_more(
     branch = get_current_branch(repo_path, "main")
     tz, tz_str = resolve_timezone()
 
+    min_target = target_per_day
+    max_target = (
+        max(min_target, max_target_per_day)
+        if max_target_per_day is not None
+        else max(min_target, int(min_target * 1.21))
+    )
+
     print(f"Repository: {os.path.abspath(repo_path)}")
     print(f"Branch:     {branch}")
     print(f"Author:     {author_name} <{author_email}>")
@@ -217,19 +236,33 @@ def fill_graph_more(
     existing_counts = get_existing_commits_by_date(repo_path)
 
     github_counts = {}
+    gh_indexed = True
     if not local_only:
         gh_user = get_github_username(repo_path)
         if gh_user:
             print(f"Fetching live GitHub contribution graph for @{gh_user}...")
             github_counts = get_github_contributions(gh_user)
             if github_counts:
-                gh_max = max(github_counts.values())
-                print(f"Live GitHub max daily contributions: {gh_max}")
-                if gh_max >= target_per_day:
-                    target_per_day = gh_max + 25
-                    print(f"Auto-adjusted target to >= {target_per_day} to stay above peak ({gh_max})")
+                lagging = sum(
+                    1
+                    for d_str, cnt in existing_counts.items()
+                    if d_str in github_counts and github_counts[d_str] < cnt - 5
+                )
+                gh_indexed = lagging <= 10
+                if gh_indexed:
+                    gh_max = max(github_counts.values())
+                    print(f"Live GitHub max daily contributions: {gh_max}")
+                    if gh_max > int(min_target / 0.80):
+                        min_target = int(gh_max * 0.85) + 10
+                        max_target = max(max_target, int(min_target * 1.20))
+                        print(
+                            f"Auto-adjusted range to {min_target}..{max_target} "
+                            f"to stay safely above peak ({gh_max})"
+                        )
+                else:
+                    print("Note: GitHub re-index in progress; combining local + other-repo counts.")
 
-    print(f"Target:     >= {target_per_day} contributions per day (Level 4 'More' threshold)\n")
+    print(f"Target:     {min_target}..{max_target} varied contributions/day (Level 4 'More' threshold)\n")
 
     now = datetime.now(tz)
     today = now.date()
@@ -257,8 +290,9 @@ def fill_graph_more(
         d_str = d.strftime("%Y-%m-%d")
         local_cnt = existing_counts.get(d_str, 0)
         gh_cnt = github_counts.get(d_str, 0)
-        current_count = max(local_cnt, gh_cnt)
-        needed = max(0, target_per_day - current_count)
+        current_count = max(local_cnt, gh_cnt) if gh_indexed else (local_cnt + gh_cnt)
+        day_target = get_daily_target(d_str, min_target, max_target)
+        needed = max(0, day_target - current_count)
 
         if needed > 0:
             days_topped_up += 1
@@ -319,7 +353,7 @@ def fill_graph_more(
     with open(filepath, "a") as f:
         f.write(
             f"Graph filled completely green in 'More' category at {datetime.now(tz).isoformat()} "
-            f"({total_commits} commits added, target >= {target_per_day})\n"
+            f"({total_commits} commits added, target {min_target}..{max_target})\n"
         )
     subprocess.run(["git", "add", filename], cwd=repo_path, capture_output=True)
     subprocess.run(
@@ -340,12 +374,18 @@ def fill_graph_more(
     effective_in_range = []
     for d in target_days:
         d_str = d.strftime("%Y-%m-%d")
-        other_cnt = max(0, github_counts.get(d_str, 0) - existing_counts.get(d_str, 0))
+        other_cnt = (
+            max(0, github_counts.get(d_str, 0) - existing_counts.get(d_str, 0))
+            if gh_indexed
+            else github_counts.get(d_str, 0)
+        )
         effective_in_range.append(updated_counts.get(d_str, 0) + other_cnt)
     min_c = min(effective_in_range)
     max_c = max(effective_in_range)
+    unique_counts = len(set(effective_in_range))
     print(f"Min contributions per day: {min_c}")
     print(f"Max contributions per day: {max_c}")
+    print(f"Distinct daily counts:     {unique_counts} unique values across {num_days} days")
     print(f"Level 4 'More' category ratio: {min_c / max_c * 100:.1f}% (Required: >= 75%)")
     print(f"🟩 100% of days ({num_days}/{num_days}) are in the 'More' (darkest green) category!")
 
@@ -393,6 +433,12 @@ def main():
         default=DEFAULT_TARGET,
         help=f"Target minimum contributions per day for 'More' category (default: {DEFAULT_TARGET})",
     )
+    parser.add_argument(
+        "--max-target",
+        type=int,
+        default=None,
+        help="Target maximum contributions per day for natural variation (default: ~1.21x --target)",
+    )
     parser.add_argument("--days", type=int, default=None, help="Number of past days to cover (default: auto-detect 371+ days)")
     parser.add_argument("--num-commits", type=int, default=None, help="Number of random commits to make (classic mode)")
     parser.add_argument("--repo-path", default=".", help="Path to git repository (default: .)")
@@ -429,10 +475,12 @@ def main():
             print("✅ All done! Check your GitHub contribution graph in a few minutes.\n")
             return
         else:
-            target = get_positive_int("Enter target commits per day for 'More' category", DEFAULT_TARGET)
+            min_target = get_positive_int("Enter minimum commits per day for 'More' category", DEFAULT_TARGET)
+            max_target = get_positive_int("Enter maximum commits per day for natural variation", int(min_target * 1.21))
             fill_graph_more(
                 repo_path=".",
-                target_per_day=target,
+                target_per_day=min_target,
+                max_target_per_day=max_target,
                 push=not args.no_push,
                 filename="data.txt",
                 local_only=args.local_only,
@@ -451,6 +499,7 @@ def main():
         fill_graph_more(
             repo_path=args.repo_path,
             target_per_day=args.target,
+            max_target_per_day=args.max_target,
             days_back=args.days,
             push=not args.no_push,
             filename=args.filename,

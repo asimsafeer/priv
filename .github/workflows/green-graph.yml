@@ -8,9 +8,14 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Target commits per day for 'More' category"
+        description: "Minimum commits per day for 'More' category"
         required: false
         default: "450"
+        type: string
+      max_target:
+        description: "Maximum commits per day for natural daily variation"
+        required: false
+        default: "545"
         type: string
 
 jobs:
@@ -40,4 +45,5 @@ jobs:
           TZ_OFFSET: "+0500"
         run: |
           TARGET="${{ inputs.target || '450' }}"
-          python3 main.py --fill-more --target "$TARGET"
+          MAX_TARGET="${{ inputs.max_target || '545' }}"
+          python3 main.py --fill-more --target "$TARGET" --max-target "$MAX_TARGET"
