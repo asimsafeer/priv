@@ -73,13 +73,16 @@ def generate_commits_fast(repo_path, commit_specs, branch="main", author_name="a
 
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_path, text=True).strip()
     
-    # Determine local timezone offset
-    now = datetime.now()
-    offset_seconds = time.localtime().tm_gmtoff
-    sign = "+" if offset_seconds >= 0 else "-"
-    abs_offset = abs(offset_seconds)
-    hours, mins = divmod(abs_offset // 60, 60)
-    tz_str = f"{sign}{hours:02d}{mins:02d}"
+    # Determine timezone offset
+    tz_override = os.environ.get("TZ_OFFSET")
+    if tz_override:
+        tz_str = tz_override
+    else:
+        offset_seconds = time.localtime().tm_gmtoff
+        sign = "+" if offset_seconds >= 0 else "-"
+        abs_offset = abs(offset_seconds)
+        hours, mins = divmod(abs_offset // 60, 60)
+        tz_str = f"{sign}{hours:02d}{mins:02d}"
 
     lines = []
     parent = head

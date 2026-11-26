@@ -1,0 +1,43 @@
+name: Keep Contribution Graph Green
+
+on:
+  schedule:
+    # Runs twice daily at 00:00 and 12:00 UTC
+    - cron: "0 0 * * *"
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target commits per day for 'More' category"
+        required: false
+        default: "185"
+        type: string
+
+jobs:
+  green:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure Git
+        run: |
+          git config user.name "aasimdev"
+          git config user.email "asimsafeer75@gmail.com"
+
+      - name: Run graph-greener
+        env:
+          TZ_OFFSET: "+0500"
+        run: |
+          TARGET="${{ inputs.target || '185' }}"
+          python3 main.py --fill-more --target "$TARGET"
